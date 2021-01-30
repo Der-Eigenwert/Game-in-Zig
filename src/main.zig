@@ -1,10 +1,17 @@
 const std = @import("std");
+const fs = std.fs;
 const print = std.debug.print;
 const sdl = @cImport(
     @cInclude("SDL2/SDL.h"),
 );
 const time = @cImport(
     @cInclude("sys/time.h"),
+);
+const png = @cImport(
+    @cInclude("png.h"),
+);
+const c = @cImport(
+    @cInclude("setjmp.h"),
 );
 
 fn sdl_check_error(code: c_int) void {
@@ -17,6 +24,17 @@ const WIDTH: usize = 10;
 const HEIGHT: usize = 7;
 
 const TILE_SIZE: u16 = 64;
+
+fn read_img_from_file(file_name: []const u8) !void {
+    var buffer = [_]u8{0} ** 200000;
+
+    var slice = try std.fs.cwd().readFile(file_name, buffer[0..]);
+
+    // TODO: read with libpng
+    // TODO: return SDL_Surface
+
+    print("{}\n", .{slice.len});
+}
 
 fn render_grid(renderer: ?*sdl.SDL_Renderer, tiles: [HEIGHT][WIDTH]u64) void {
     for (tiles) |col, j| {
@@ -67,6 +85,8 @@ pub fn main() !void {
         [_]u64{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
         [_]u64{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
     };
+
+    try read_img_from_file("tileset.png");
 
     var quit = false;
     var start: time.timeval = undefined;

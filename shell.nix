@@ -38,6 +38,7 @@ pkgs.mkShell {
     zls
 
     pkgs.SDL2
+    pkgs.libpng12
 
     pkgs.bashInteractive
   ];
