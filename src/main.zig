@@ -1,18 +1,17 @@
 const std = @import("std");
 const fs = std.fs;
 const print = std.debug.print;
-const sdl = @cImport(
-    @cInclude("SDL2/SDL.h"),
-);
-const time = @cImport(
-    @cInclude("sys/time.h"),
-);
-const png = @cImport(
-    @cInclude("png.h"),
-);
-const c = @cImport(
-    @cInclude("setjmp.h"),
-);
+const Allocator = std.heap.c_allocator;
+const sdl = @cImport({
+    @cInclude("SDL2/SDL.h");
+});
+const time = @cImport({
+    @cInclude("sys/time.h");
+});
+const c = @cImport({
+    @cInclude("png.h");
+    @cInclude("setjmp.h");
+});
 
 fn sdl_check_error(code: c_int) void {
     if (code != 0) {
@@ -25,15 +24,73 @@ const HEIGHT: usize = 7;
 
 const TILE_SIZE: u16 = 64;
 
-fn read_img_from_file(file_name: []const u8) !void {
-    var buffer = [_]u8{0} ** 200000;
+fn texture_from_file(renderer: ?*sdl.SDL_Renderer, file_name: [*:0]const u8) !*sdl.SDL_Texture {
+    const fp = c.fopen(file_name, "rb") orelse std.os.abort();
 
-    var slice = try std.fs.cwd().readFile(file_name, buffer[0..]);
+    var header = [_]u8{0} ** 8;
 
-    // TODO: read with libpng
-    // TODO: return SDL_Surface
+    var header_slice: []u8 = header[0..];
 
-    print("{}\n", .{slice.len});
+    _ = c.fread(header_slice.ptr, 1, 8, fp);
+
+    if (c.png_sig_cmp(header_slice.ptr, 0, 8) != 0) {
+        std.os.abort();
+    }
+
+    const png_ptr: c.png_structp = c.png_create_read_struct(c.PNG_LIBPNG_VER_STRING, null, null, null) orelse std.os.abort();
+
+    const info_ptr: c.png_infop = c.png_create_info_struct(png_ptr) orelse std.os.abort();
+
+    const jmp_buf: []c.__jmp_buf_tag = c.png_jmpbuf(png_ptr)[0..];
+    if (c.setjmp(jmp_buf.ptr) != 0) {
+        std.os.abort();
+    }
+
+    c.png_init_io(png_ptr, fp);
+
+    c.png_set_sig_bytes(png_ptr, 8);
+
+    c.png_read_info(png_ptr, info_ptr);
+
+    const width = c.png_get_image_width(png_ptr, info_ptr);
+    const height = c.png_get_image_height(png_ptr, info_ptr);
+    const color_type = c.png_get_color_type(png_ptr, info_ptr);
+    const bit_depth = c.png_get_bit_depth(png_ptr, info_ptr);
+
+    const number_of_passes = c.png_set_interlace_handling(png_ptr);
+    c.png_read_update_info(png_ptr, info_ptr);
+
+    var row_pointers = try Allocator.alloc(c.png_bytep, height);
+
+    for (row_pointers) |*row| {
+        row.* = (try Allocator.alloc(c.png_byte, c.png_get_rowbytes(png_ptr, info_ptr))).ptr;
+    }
+
+    c.png_read_image(png_ptr, row_pointers.ptr);
+
+    var pixels = [_]c.png_byte{0} ** (512 * 512 * 4);
+
+    for (pixels) |*byte, i| {
+        byte.* = row_pointers[i / (512 * 4)][i % 512];
+    }
+
+    var pixels_slice: []u8 = pixels[0..];
+
+    const surface = sdl.SDL_CreateRGBSurfaceFrom(
+        pixels_slice.ptr,
+        @intCast(c_int, width),
+        @intCast(c_int, height),
+        4 * bit_depth,
+        @intCast(c_int, 4 * width),
+        0x000000FF,
+        0x0000FF00,
+        0x00FF0000,
+        0xFF000000,
+    ) orelse std.os.abort();
+
+    const texture = sdl.SDL_CreateTextureFromSurface(renderer, surface) orelse std.os.abort();
+
+    return texture;
 }
 
 fn render_grid(renderer: ?*sdl.SDL_Renderer, tiles: [HEIGHT][WIDTH]u64) void {
@@ -50,6 +107,24 @@ fn render_grid(renderer: ?*sdl.SDL_Renderer, tiles: [HEIGHT][WIDTH]u64) void {
             sdl_check_error(sdl.SDL_RenderFillRect(renderer, &rect));
         }
     }
+}
+
+fn render_texture(renderer: ?*sdl.SDL_Renderer, texture: *sdl.SDL_Texture) void {
+    const src = sdl.SDL_Rect{
+        .x = 0,
+        .y = 0,
+        .w = 32 * 3,
+        .h = 32 * 3,
+    };
+
+    const dest = sdl.SDL_Rect{
+        .x = 0,
+        .y = 0,
+        .w = TILE_SIZE * 3,
+        .h = TILE_SIZE * 3,
+    };
+
+    sdl_check_error(sdl.SDL_RenderCopy(renderer, texture, &src, &dest));
 }
 
 fn render_player(renderer: ?*sdl.SDL_Renderer, x: isize, y: isize, colour: bool) void {
@@ -86,7 +161,7 @@ pub fn main() !void {
         [_]u64{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
-    try read_img_from_file("tileset.png");
+    const texture = try texture_from_file(renderer, "tileset.png");
 
     var quit = false;
     var start: time.timeval = undefined;
@@ -127,6 +202,7 @@ pub fn main() !void {
         sdl_check_error(sdl.SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255));
         sdl_check_error(sdl.SDL_RenderClear(renderer));
         render_grid(renderer, tiles);
+        render_texture(renderer, texture);
         render_player(renderer, x, y, colour);
         sdl.SDL_RenderPresent(renderer);
 
